@@ -1,38 +1,96 @@
 module managed::managed {
-    use sui::coin;
-    use sui::coin_registry;
-    use sui::tx_context;
-    use sui::transfer;
     use std::string;
+    use sui::tx_context::{Self, TxContext};
+    use sui::coin::{Self, Coin, TreasuryCap};
+    use sui::coin_registry;
+    use sui::transfer;
+    use sui::object;
 
 
     public struct MANAGED has drop {}
 
 
-    fun init(witness: MANAGED, ctx: &mut tx_context::TxContext) {
+    public struct ManagedToken has key {
+        id: object::UID,
+        owner: address,
+        paused: bool,
+        total_supply: u64,
+    }
 
-        let (init, cap) = coin_registry::new_currency_with_otw<MANAGED>(
+
+    fun init(witness: MANAGED, ctx: &mut TxContext) {
+        let (currency_init, treasury_cap) = coin_registry::new_currency_with_otw<MANAGED>(
             witness,
-            string::utf8(b"Managed Token"), // name
-            string::utf8(b"MGD"),           // symbol
-            9,                              // decimals
-            true,                           // icon display
-            string::utf8(b"https://ibb.co/LDxs7LP0"), // icon_url
+            9u8, // decimals
+            string::utf8(b"MGD"),
+            string::utf8(b"Managed Token V2"),
+            string::utf8(b"Token with admin control and total supply"),
+            string::utf8(b"https://example.com/icon.png"),
             ctx
         );
 
+        transfer::public_freeze_object(currency_init);
 
-        transfer::public_freeze_object(init);
 
-        transfer::public_transfer(cap, tx_context::sender(ctx));
+        let admin = ManagedToken {
+            id: object::new(ctx),
+            owner: tx_context::sender(ctx),
+            paused: false,
+            total_supply: 0,
+        };
+
+
+        transfer::public_transfer(treasury_cap, tx_context::sender(ctx));
+        transfer::public_transfer(admin, tx_context::sender(ctx));
     }
 
 
-    public fun burn(cap: &mut coin::TreasuryCap<MANAGED>, coin_obj: coin::Coin<MANAGED>): u64 {
-        coin::burn(cap, coin_obj)
+    fun assert_owner(admin: &ManagedToken, ctx: &TxContext) {
+        assert!(admin.owner == tx_context::sender(ctx), 0);
     }
 
-    public fun simple_transfer(c: coin::Coin<MANAGED>, to: address) {
+    fun assert_not_paused(admin: &ManagedToken) {
+        assert!(!admin.paused, 1);
+    }
+
+
+    public entry fun toggle_pause(admin: &mut ManagedToken, ctx: &TxContext) {
+        assert_owner(admin, ctx);
+        admin.paused = !admin.paused;
+    }
+
+    /// 🪙 Mint token mới (chỉ owner)
+    public entry fun mint_and_send(
+        admin: &mut ManagedToken,
+        cap: &mut TreasuryCap<MANAGED>,
+        amount: u64,
+        recipient: address,
+        ctx: &mut TxContext,
+    ) {
+        assert_owner(admin, ctx);
+        assert_not_paused(admin);
+        coin::mint_and_transfer(cap, amount, recipient, ctx);
+        admin.total_supply = admin.total_supply + amount;
+    }
+    public entry fun burn(
+        admin: &mut ManagedToken,
+        cap: &mut TreasuryCap<MANAGED>,
+        coin_obj: Coin<MANAGED>,
+        ctx: &mut TxContext,
+    ) {
+        assert_owner(admin, ctx);
+        assert_not_paused(admin);
+        let burned = coin::burn(cap, coin_obj);
+        admin.total_supply = admin.total_supply - burned;
+    }
+
+
+    public fun get_total_supply(admin: &ManagedToken): u64 {
+        admin.total_supply
+    }
+
+
+    public entry fun transfer_coin(c: Coin<MANAGED>, to: address) {
         transfer::public_transfer(c, to);
     }
 }
